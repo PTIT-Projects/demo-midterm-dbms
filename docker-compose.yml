@@ -1,0 +1,117 @@
+services:
+  mysql:
+    image: mysql:latest
+    ports:
+      - "3307:3306"
+    volumes:
+      - ./mysql:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      MYSQL_ROOT_PASSWORD: wp
+      MYSQL_USER: test_user
+      MYSQL_PASSWORD: superSecretPassword!123
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "test_user", "--password=superSecretPassword!123"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    networks:
+      - app-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    ports:
+      - "8123:8123"  # HTTP port
+      - "9000:9000"  # Native port
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse-init.sql:/docker-entrypoint-initdb.d/clickhouse-init.sql
+    networks:
+      - app-network
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhousepass 
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"  # UI port
+      - "14250:14250"  # Model used by jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - app-network
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector-config.yml"]
+    volumes:
+      - ./otel-collector-config.yml:/etc/otel-collector-config.yml
+    ports:
+      - "4317:4317"  # OTLP gRPC
+      - "4318:4318"  # OTLP HTTP
+    networks:
+      - app-network
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    restart: on-failure
+
+  epl-web:
+    build: ./epl-web
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    volumes:
+      - ./opentelemetry-javaagent.jar:/app/opentelemetry-javaagent.jar
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/football_stat_web
+      SPRING_DATASOURCE_USERNAME: test_user
+      SPRING_DATASOURCE_PASSWORD: superSecretPassword!123
+      
+      # OpenTelemetry configuration - FIX: Add http:// prefix
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_SERVICE_NAME: epl-web-service
+      OTEL_TRACES_SAMPLER: always_on
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER: otlp
+      
+      # Java agent configuration
+      JAVA_TOOL_OPTIONS: "-javaagent:/app/opentelemetry-javaagent.jar"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  clickhouse-data:
+  grafana-storage:
