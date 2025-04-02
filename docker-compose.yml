@@ -97,7 +97,6 @@ services:
       SPRING_DATASOURCE_USERNAME: test_user
       SPRING_DATASOURCE_PASSWORD: superSecretPassword!123
       
-      # OpenTelemetry configuration - FIX: Add http:// prefix
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_SERVICE_NAME: epl-web-service
@@ -116,7 +115,7 @@ services:
     ports:
       - "5173:5173"
     volumes:
-      - ./fe:/app  # Changed from ./fe/epl-web to ./fe
+      - ./fe:/app
       - frontend_node_modules:/app/node_modules
     environment:
       - VITE_API_URL=http://localhost:8080
